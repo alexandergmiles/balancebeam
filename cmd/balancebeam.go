@@ -4,35 +4,55 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/alexandergmiles/balancebeam/internal/balance"
 )
 
 func main() {
 	fmt.Println("Starting up balancebeam load balancer")
 
-	beam := balance.NewRouter()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	beam := balance.NewBeam(*logger)
+
+	configureRoutes(beam)
+
+	server := http.Server{Addr: ":8000", Handler: beam.Router}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	go startServer(&server)
+	<-ctx.Done()
 
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
-	<-signals
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
 
-	shutdownContext, cancelFunc := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancelFunc()
-
-	if err := server.Shutdown(shutdownContext); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		panic(err)
 	}
-	fmt.Println("Shutdown successfully")
+	fmt.Println("Shutdown gracefully")
 }
 
 func startServer(server *http.Server) {
 	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-		panic(err)
+		fmt.Println(err)
 	}
+}
+
+func configureRoutes(beam *balance.Beam) error {
+	if beam == nil {
+		return fmt.Errorf("beam is nil")
+	}
+
+	beam.Register("/google", "echo.free.beeceptor.com")
+	beam.Register("/google", "localhost")
+	beam.Register("/index", "echo.free.beeceptor.com")
+
+	return nil
 }
